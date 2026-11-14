@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1a5143">
+  <meta name="description" content="Unmute — a patient-controlled silent communication prototype.">
+  <title>Unmute · A little movement. A whole voice.</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to communication</a>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#patient" aria-label="Unmute home"><span class="brand-mark" aria-hidden="true">u<span>·</span></span><span>unmute<span class="brand-dot">.</span></span></a>
+      <div class="workspace-label">YOUR COMMUNICATION SPACE</div>
+      <nav aria-label="Main navigation">
+        <button class="nav-link active" data-view="patient"><span data-icon="voice"></span>My voice<span class="nav-indicator"></span></button>
+        <button class="nav-link" data-view="teach"><span data-icon="spark"></span>Teach phrases</button>
+        <button class="nav-link" data-view="care"><span data-icon="heart"></span>Care team<span id="pending-count" class="count hidden">0</span></button>
+        <button class="nav-link" data-view="insights"><span data-icon="chart"></span>Session insights</button>
+        <button class="nav-link" data-view="settings"><span data-icon="sliders"></span>Preferences</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="private-note"><span data-icon="shield"></span><div><strong>Your words. Your choice.</strong><p>Nothing is spoken until you confirm.</p></div></div>
+        <div class="profile-mini"><span class="avatar" id="avatar">A</span><div><strong id="sidebar-name">Alex</strong><span id="sidebar-room">Bed 01</span></div><span class="status-dot"></span></div>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar"><div class="breadcrumb">A little movement. <span>A whole voice.</span></div><div class="topbar-right"><span id="connection" class="connection"><i></i>Connecting</span><button class="icon-button" id="settings-shortcut" aria-label="Preferences"><span data-icon="sliders"></span></button></div></header>
+      <main id="main" tabindex="-1">
+        <section id="view-patient" class="view">
+          <div class="page-heading"><div><div class="eyebrow">A SPACE TO BE HEARD</div><h1>Your voice starts here<span>.</span></h1><p>Take your time. We’re here to listen.</p></div><button id="help-button" class="help-button"><span data-icon="bell"></span>Request help</button></div>
+          <div id="offline-banner" class="notice hidden" role="status">Connection lost. Your current selection is preserved. Sending resumes when the server reconnects.</div>
+          <div class="patient-grid">
+            <div class="camera-card card">
+              <div class="card-heading"><h2><span data-icon="camera"></span>Your camera</h2><span id="camera-badge" class="badge">Camera off</span></div>
+              <div id="camera-stage" class="camera-stage">
+                <video id="camera" autoplay playsinline muted></video>
+                <div id="camera-placeholder" class="camera-placeholder"><div class="face-illustration" aria-hidden="true"><svg viewBox="0 0 200 200"><path d="M60 88c0-36 17-56 40-56s40 20 40 56v25c0 29-19 54-40 54s-40-25-40-54Z"/><path d="M79 89h1m40 0h1M99 96l-5 20h12M85 133q15 12 30 0M51 77v45m98-45v45"/><path class="face-guide" d="M30 63V38h25m90 0h25v25M30 138v25h25m90 0h25v-25"/></svg></div><strong>A little movement goes a long way.</strong><p>Enable your camera to begin.<br>Video stays on this device in Quick Phrases mode.</p><button class="button primary" id="camera-start"><span data-icon="camera"></span>Enable camera</button></div>
+                <div id="mouth-guide" class="mouth-guide hidden"><span>ALIGN YOUR MOUTH</span></div>
+                <div id="capture-overlay" class="capture-overlay hidden"><span class="record-dot"></span><span id="capture-message">Recording</span><span id="capture-clock">3.0s</span></div>
+                <div id="camera-live" class="camera-live hidden"><i></i>VIDEO ONLY · NO MICROPHONE</div>
+                <button id="camera-stop" class="camera-stop hidden" aria-label="Turn camera off">Turn off</button>
+              </div>
+              <div class="camera-footer"><span data-icon="sun"></span><span id="camera-hint">Face the camera in a well-lit space.</span><button id="align-toggle" class="text-button">Adjust guide</button></div>
+              <div id="alignment" class="alignment hidden"><label>Horizontal<input id="roi-x" type="range" min="20" max="80" value="50"></label><label>Vertical<input id="roi-y" type="range" min="20" max="80" value="64"></label><label>Size<input id="roi-size" type="range" min="15" max="60" value="32"></label><p>Place the box around your mouth. Keep the same framing when teaching and recognizing.</p></div>
+              <div class="record-controls"><label class="select-label" for="recognition-mode">RECOGNITION MODE</label><select id="recognition-mode"><option value="local">My trained phrases · offline</option><option value="avsr">Open sentences · Auto-AVSR</option></select><label class="check-label"><input id="avsr-gemini" type="checkbox">Clarify open sentences with Gemini</label><p class="microcopy">Optional: sends the transcript and saved context to Google, never video.</p><button id="record-button" class="button primary wide"><span data-icon="record"></span>Record a phrase<span class="keycap">R</span></button><p id="model-note" class="microcopy">Teach at least two phrases to begin, or use the quick phrases below.</p></div>
+            </div>
+
+            <div class="right-stack">
+              <div class="interpretation-card card">
+                <div class="card-heading"><h2><span data-icon="voice"></span>Let’s find your words</h2><span id="interpret-badge" class="badge green">You’re in control</span></div>
+                <div id="interpretation-empty" class="interpretation-empty"><div class="quote-mark">“</div><h3>What would you like to say?</h3><p>Mouth a phrase or choose a shortcut.<br>Your possible words will appear here.</p><div class="steps"><span><b>1</b>Record</span><i></i><span><b>2</b>Choose</span><i></i><span><b>3</b>Speak</span></div></div>
+                <div id="choice-panel" class="choice-panel hidden"><p id="raw-transcript" class="microcopy hidden"></p><div id="candidate-question" class="candidate-question">Which sentence did you mean?</div><p id="candidate-source" class="microcopy"></p><div id="candidates" role="group" aria-label="Possible sentences"></div><button id="none-button" class="text-button none-button">None of these · try again</button><div id="confirmation" class="confirmation hidden"><span>YOU SELECTED</span><p id="selected-text"></p><div class="confirmation-actions"><button id="confirm-button" class="button primary"><span data-icon="volume"></span>Confirm & speak</button><button id="back-button" class="button secondary">Go back</button></div></div></div>
+                <div id="sent-panel" class="sent-panel hidden" role="status"><div class="success-ring" data-icon="check"></div><span class="eyebrow">YOUR VOICE, HEARD</span><h3 id="sent-text"></h3><div id="request-status" class="request-status">Sent · waiting for acknowledgment</div><div class="sent-actions"><button id="repeat-button" class="button secondary"><span data-icon="volume"></span>Speak again</button><button id="new-button" class="text-button">Say something else →</button></div></div>
+                <div class="interpretation-footer"><span data-icon="shield"></span>Always review before you speak.</div>
+              </div>
+              <div class="demo-card"><span class="demo-icon" data-icon="spark"></span><div><strong>See a voice come to life.</strong><p>Try the interaction with sample candidates.</p></div><button id="demo-button" class="text-button">Try demo <span>↗</span></button></div>
+              <details class="type-card card"><summary>Prefer to type? <span data-icon="keyboard"></span></summary><form id="typed-form"><label for="typed-input">Your words or a noisy transcript</label><textarea id="typed-input" rows="2" maxlength="250" placeholder="For example: call my dotter" required></textarea><label class="check-label"><input id="gemini-toggle" type="checkbox">Ask Gemini for interpretations <span id="gemini-note">(key required)</span></label><p class="microcopy">When enabled, text and saved context are sent to Google. Camera video is not sent to Gemini.</p><button class="button secondary" type="submit">Review possible words</button></form></details>
+            </div>
+          </div>
+          <section class="quick-section"><div class="section-heading"><div><h2>A few words, a little easier.</h2><p>Everyday requests, always within reach.</p></div><div class="filter-tabs" role="group" aria-label="Filter quick phrases"><button class="active" data-filter="All">All phrases</button><button data-filter="Comfort">Comfort</button><button data-filter="Help">Help</button><button data-filter="Connection">Connection</button></div></div><div id="quick-phrases" class="quick-grid"></div></section>
+          <div class="access-bar"><label class="check-label"><input id="scan-toggle" type="checkbox">One-switch scanning</label><span>Press <kbd>Space</kbd> to select · <kbd>Esc</kbd> to go back</span><button id="usb-button" class="text-button"><span data-icon="usb"></span>Connect bedside controller</button></div>
+        </section>
+
+        <section id="view-teach" class="view hidden"><div class="page-heading"><div><div class="eyebrow">A VOICE THAT’S YOURS</div><h1>A little practice, together<span>.</span></h1><p>Teach a few phrases using your own mouth movements.</p></div><button class="button secondary" data-go="patient">Back to my voice</button></div><div class="notice">Experimental template matching, tailored to one person and camera position. Start with 3 distinct phrases and record 3 examples of each. Accuracy is measured, never assumed.</div><div class="teach-grid"><div class="card padded"><h2>1. Choose your words</h2><p class="muted">Use the same lighting, position, and natural mouthing pace each time.</p><label for="teach-phrase">Phrase to teach</label><select id="teach-phrase"></select><div class="teach-prompt"><span>MOUTH THESE WORDS</span><h3 id="teach-prompt">I need water</h3><p>After the countdown, mouth the phrase once during the 3-second recording.</p></div><button id="teach-record" class="button primary wide"><span data-icon="record"></span>Record example</button><p id="teach-feedback" role="status" class="microcopy">Camera must be enabled on My voice first.</p><button id="teach-remove" class="text-button">Remove examples for this phrase</button></div><div class="card padded"><h2>2. Check your progress</h2><div id="training-list" class="training-list"></div><button id="validate-button" class="button secondary wide">Run leave-one-out evaluation</button><div id="validation-result" class="evaluation-result">Your evaluation results will appear here. For a stronger check, record new clips in My voice without saving them as training examples.</div><p class="microcopy">Only cropped image descriptors are stored in this browser. No raw video or microphone recordings are saved.</p></div></div></section>
+
+        <section id="view-care" class="view hidden"><div class="page-heading"><div><div class="eyebrow">ON THE OTHER SIDE OF A VOICE</div><h1>Every request, received<span>.</span></h1><p>A shared view of confirmed requests and their progress.</p></div><span class="badge green">Live · refreshes every 2 seconds</span></div><div id="care-summary" class="stat-grid"></div><div class="section-heading"><h2>Request queue</h2><label class="check-label"><input id="show-resolved" type="checkbox">Show resolved</label></div><div id="care-requests" class="care-requests"></div></section>
+
+        <section id="view-insights" class="view hidden"><div class="page-heading"><div><div class="eyebrow">PROOF BEHIND THE PROTOTYPE</div><h1>Small moments. Real progress<span>.</span></h1><p>Observed communication metrics. Demo events are excluded.</p></div><button id="export-button" class="button secondary"><span data-icon="download"></span>Export session</button></div><div id="insight-stats" class="stat-grid"></div><div class="insights-grid"><div class="card padded"><h2>How your voice gets through</h2><div id="source-chart" class="source-chart"></div><p class="microcopy">Counts represent confirmed requests, not recognition accuracy.</p></div><div class="card padded"><h2>Words remembered</h2><p class="muted">Confirmed examples can inform later text suggestions. They do not fine-tune a neural model.</p><div id="memory-list"></div></div></div><div class="card padded session-table"><h2>Session history</h2><div class="table-scroll"><table><thead><tr><th>Request</th><th>Source</th><th>Status</th><th>Time</th></tr></thead><tbody id="history-body"></tbody></table></div></div></section>
+
+        <section id="view-settings" class="view hidden"><div class="page-heading"><div><div class="eyebrow">COMFORT COMES FIRST</div><h1>Make this space yours<span>.</span></h1><p>Choose the details that help you communicate.</p></div></div><div class="settings-grid"><form id="profile-form" class="card padded"><h2>Your communication profile</h2><label for="profile-name">Preferred name</label><input id="profile-name" maxlength="60" required><label for="profile-room">Bed or room label</label><input id="profile-room" maxlength="60" required><label for="profile-names">Names that matter to you</label><input id="profile-names" maxlength="300" placeholder="For example: Priya, my daughter"><label for="profile-context">Optional context for text suggestions</label><textarea id="profile-context" rows="3" maxlength="1000" placeholder="Communication preferences or relevant context"></textarea><p class="microcopy">Context and names are shared with Google only when you explicitly ask Gemini for interpretations.</p><label for="scan-speed">Scanning interval <output id="scan-speed-label">2.2 seconds</output></label><input id="scan-speed" type="range" min="800" max="6000" step="100" value="2200"><button class="button primary" type="submit">Save preferences</button></form><div class="settings-stack"><div class="card padded"><h2>Speech & display</h2><label for="voice-select">Speaking voice</label><select id="voice-select"><option value="">System default</option></select><label for="speech-rate">Speech speed</label><input id="speech-rate" type="range" min="0.5" max="1.4" step="0.1" value="0.9"><label class="check-label"><input id="large-text" type="checkbox">Larger text</label><label class="check-label"><input id="high-contrast" type="checkbox">Higher contrast</label><label class="check-label"><input id="auto-speak" type="checkbox" checked>Speak after confirmation</label></div><div class="card padded"><h2>Connections</h2><div id="integration-status" class="integration-status"></div><div class="integration-actions"><button id="check-gemini" class="button secondary" type="button">Test Gemini</button><button id="check-atlas" class="button secondary" type="button">Test Atlas</button></div><p class="microcopy">After editing .env, restart the server. Gemini tests use synthetic text; Atlas tests only read connection status and the request count.</p><div id="integration-check-results" aria-live="polite"></div><label for="access-token">Server access token (network mode)</label><input id="access-token" type="password" autocomplete="off" placeholder="Only needed if configured on server"><button id="token-save" class="button secondary" type="button">Connect</button><p class="microcopy">API keys are configured in the server’s .env file. They are never sent to the browser.</p></div></div></div></section>
+        <footer class="page-footer"><span>unmute<span class="brand-dot">.</span> <span class="footer-tagline">Communication, on your terms.</span></span><span>HackUMass XIV prototype · Not a clinical alert system</span></footer>
+      </main>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <dialog id="countdown-dialog"><div class="eyebrow">GET READY</div><div id="countdown-number">3</div><p id="countdown-phrase">Mouth your phrase after the countdown.</p></dialog>
+</body>
+</html>

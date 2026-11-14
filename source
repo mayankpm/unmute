@@ -1,0 +1,174 @@
+Unmute: HackUMass XIV Team Handoff
+Nov 13, 2026 · @Someone
+Introduction
+We are building Unmute, a silent speech interface that lets patients who cannot make a sound talk again. A camera reads their lips, AI turns the lip movement into a full sentence, and the laptop speaks it out loud.
+Who it is for. Patients on a ventilator in the ICU are often awake and alert, but the breathing tube stops them from speaking. Today, nurses guess what they are mouthing or hand them a letter board. People who lost their voice to throat cancer surgery or ALS face the same problem.
+One-line pitch. "Unmute gives a voice back to patients who cannot speak, using only a camera."
+Inspiration. At TreeHacks 2025, BlinkAI won Best Beginner by turning blinked Morse code into text. Morse code is slow and exhausting. We read whole sentences from the lips instead.
+Why it is unique
+The problem is proven, and the closest product is limited. Our angle is open sentences, context and working offline.
+Honest prior art. A Belfast company, Liopa, built SRAVI, a lip-reading app for tracheostomy patients that recognises a fixed list of 40 phrases, such as "I need the toilet." It has been tested in UK hospitals, and one feasibility study reported about 75% accuracy. A UK study of its acceptability found the main complaints were the effort to use it, and Wi-Fi problems. Judges may know it, so we say this up front.
+
+SRAVI
+Unmute
+What it understands
+40 fixed phrases
+Open sentences, plus fast Quick Phrases
+How it guesses
+Lip movement only
+Lip movement + bedside context (Gemini)
+Needs Wi-Fi
+Yes, a reported pain point
+Core model runs on the laptop, offline
+Gets better with use
+No
+Learns each patient's lips from a short calibration
+How it confirms
+Patient taps a choice
+Patient nods at one of 3 choices
+Voice
+Text on a screen
+Spoken out loud
+Our pitch line. "The tools that exist understand 40 phrases. Patients have more to say than that."
+Is it doable
+Yes, because we do not train a lip reader from scratch. We use an open-source one and build the product around it.
+• The model exists. Auto-AVSR is an open-source lip-reading model with a word error rate of about 20% on its benchmark. Copies of the weights are on Hugging Face, for example this re-host, which reports 25 to 30% on clean speech.
+• The license. The weights are for non-commercial research use. That is fine for a hackathon. Say so if a judge asks about the business.
+• Hardware. A laptop webcam. Inference on a short clip should take a few seconds on a laptop CPU. A GPU is not required.
+Risk
+What we do about it
+Setup of the model eats the night
+One person only. Hard stop at 3 AM: if no words appear on screen, Quick Phrases becomes the core.
+The raw model gets 1 in 4 words wrong
+Gemini fixes words using bedside context, then the patient picks from 3 choices.
+Lip reading fails on our faces or lighting
+Good front light, camera at face height, mouth clearly visible. Calibrate on each speaker.
+The live demo fails at judging
+Quick Phrases mode is trained on our own faces and should be near-perfect. Record a backup video Saturday evening.
+Many words look the same on the lips
+Expected. That is why we show 3 choices instead of one guess.
+How it works
+Open sentences go through the lip reader and Gemini. Quick Phrases skip both and go straight to the choices, which keeps the demo safe.
+Roles and first tasks tonight
+Each person owns one part. The goal by 3 AM is any correct words on screen from a silent video.
+Person 1: Lip-reading model
+[ ] Clone Auto-AVSR and download the pretrained visual-only weights
+[ ] Set up mouth cropping with MediaPipe face landmarks
+[ ] Record a 3-second silent clip of yourself saying "I need water"
+[ ] Run the model on that clip and print the text
+[ ] Measure how long one clip takes on the laptop
+Person 2: Gemini correction and voice
+[ ] Get a Gemini API key from Google AI Studio
+[ ] Write the prompt: given a noisy transcript and the bedside context, return the 3 most likely sentences
+[ ] Test it on fake noisy text, such as "I need wader" and "cal my dotter"
+[ ] Add text-to-speech so the chosen sentence is spoken out loud
+Person 3: Quick Phrases and the app
+[ ] Write the list of 20 ICU phrases (see below)
+[ ] Record each phrase 10 times per teammate, silent, same camera and light
+[ ] Build the app screen: live camera, a Record button, 3 choices, a Speak button
+[ ] Set up the GitHub repo and share it with the team
+Starter list of 20 Quick Phrases
+I need water · I am in pain · Call the nurse · Where am I · Call my family · I am cold · I am hot · I need the toilet · I cannot breathe · Yes · No · Thank you · I am scared · What time is it · Move my pillow · I feel sick · Turn off the light · I am tired · Help me · I love you
+Bedside unit and nurse pager (hardware)
+Two small devices turn Unmute from an app into a bedside system: one at the bed, and one that pages the nurse. Do not start hardware until a mouthed phrase is spoken out loud end to end.
+Part
+Device
+Feature it adds
+Why it helps
+Arduino + Grove base shield + cables
+Bedside unit
+Runs the bedside parts and talks to the laptop over USB
+Grove parts plug in with no soldering
+LCD RGB Backlight
+Bedside unit
+Shows the last request. Green means normal, red means urgent
+A nurse can read it from the doorway
+Touch Sensor
+Bedside unit
+Confirms a choice with a light touch
+For patients who cannot nod
+Light Sensor
+Bedside unit
+Says "Turn on the bed light" when the room is too dark
+Lip reading fails in dim rooms, a common ICU problem at night
+Buzzer
+Bedside unit
+Sounds when an urgent phrase is detected
+An emergency gets noticed even if nobody watches the screen
+ESP32 + Buzzer
+Nurse pager
+Gets urgent alerts over WiFi and buzzes
+The nurse does not have to be in the room
+Red Quad Alphanumeric Display (optional)
+Nurse pager
+Flashes short words: PAIN, H2O, HELP
+Readable from across a room
+Urgent phrases that trigger both alarms: I cannot breathe · I am in pain · Help me · Call the nurse.
+How it connects
+1.  The laptop runs Unmute and settles on the final sentence.
+2.  The laptop sends the sentence to the Arduino over USB. The LCD shows it, and the buzzer sounds if it is urgent.
+3.  The Arduino sends the touch and the light level back to the laptop.
+4.  The laptop sends urgent alerts to the ESP32 pager over WiFi. Use a phone hotspot, because venue WiFi often blocks small devices.
+Owner: Person 2, once the Gemini correction works, around noon.
+[ ] Collect the parts: Arduino, Grove shield, cables, LCD, Touch Sensor, Light Sensor, 2 Buzzers, ESP32, USB data cables, optional Quad Display
+[ ] Arduino: the LCD shows text sent from the laptop
+[ ] Arduino: touch and light readings reach the laptop
+[ ] ESP32: joins the phone hotspot, receives a message from the laptop, buzzes
+[ ] Connect to Unmute: an urgent phrase turns the bedside unit red and buzzes the pager
+Pitch line it gives us: "Unmute does not just speak for the patient. It calls the nurse when it hears an emergency."
+Timeline
+The official deadlines are 12 AM Sunday for the initial submission and 9 AM Sunday for the final one. Each diamond is a checkpoint: if we miss it, we cut scope instead of pushing on.
+Features to add later
+Add these in order, and only once the core works end to end. Each one answers a weakness a judge might raise.
+Priority
+Feature
+Why it matters
+1
+Per-patient calibration: the patient mouths 10 known phrases, and the model adapts to their lips
+Every face is different. This is the biggest accuracy gain.
+2
+Bedside context: time of day, last meal, who is in the room, recent requests go into the Gemini prompt
+"I need wader" becomes "I need water" because it has been 3 hours since a drink.
+3
+Confirm by nod: head pose picks choice 1, 2 or 3, a head shake means none
+Many patients cannot tap a screen.
+4
+Offline mode: lip reading runs on the laptop, Gemini is only used when online
+Wi-Fi problems were a top complaint about the existing app.
+5
+Accuracy report: test on held-out clips and show the word error rate before and after Gemini correction
+Real numbers beat claims. Most teams never measure.
+6
+Nurse dashboard: a log of what each patient asked for and when
+Shows the product fits a real ward, not just a demo.
+7
+Their own voice: patients record their voice before surgery, and Unmute speaks in it
+A strong emotional moment for the pitch. Only if time allows.
+8
+Other languages
+Auto-AVSR has models for several languages. A "next steps" line in the pitch.
+Demo, pitch and prizes
+The demo moment: a judge mouths a sentence in silence, and the laptop says it out loud.
+Two-minute pitch
+1.  Hook (15 s): "Imagine waking up in the ICU, fully alert, and you cannot make a sound."
+2.  Problem (15 s): breathing tubes take away the voice. Letter boards are slow, and the existing app only knows 40 phrases.
+3.  Live demo (60 s): a teammate mouths "I need water" in Quick Phrases mode. Then a judge mouths an open sentence, the screen shows 3 choices, a nod picks one, and it is spoken.
+4.  Proof (15 s): our word error rate before and after Gemini correction.
+5.  Vision (15 s): per-patient calibration, offline on any tablet, their own voice.
+Prizes to target
+• Best MedTech Hack
+• Best Accessibility Hack
+• Most Impactful AI Hack
+• Best Hardware Hack (bedside unit and nurse pager)
+• Best Software Hack
+• Best UI/UX
+• Best Use of Gemini API (MLH)
+• Best Use of MongoDB Atlas (MLH), if we store the request log there
+Sources
+• Auto-AVSR on GitHub: the open-source lip-reading model
+• Visual Speech Recognition for Multiple Languages: the same team's models and tutorial
+• Silent Lip Reader weights on Hugging Face: a re-hosted copy of the weights
+• SRAVI trial coverage: the existing 40-phrase app
+• SRAVI feasibility study: its accuracy
+• SRAVI acceptability study: the complaints about it
+• HackUMass XIV schedule and prizes

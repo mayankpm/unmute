@@ -1,0 +1,13 @@
+.venv/
+.model-venv/
+__pycache__/
+*.pyc
+.env
+atlas-credentials.env
+data/
+models/
+vendor/
+artifacts/
+.DS_Store
+*.zip
+firmware/**/secrets.h

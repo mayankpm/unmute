@@ -1,0 +1,2 @@
+# Only needed for the optional MongoDB Atlas event mirror.
+pymongo>=4.10,<5
