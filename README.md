@@ -1,207 +1,234 @@
 # Unmute
 
-A patient-controlled silent communication prototype for HackUMass XIV.
+**A little movement. A whole voice.**
 
-**Record → review possible words → choose → confirm & speak → caregiver acknowledgment.**
+Unmute is a patient-controlled silent communication prototype for HackUMass XIV.
+Start a communication session, mouth a phrase, review the possible words, correct
+anything that is wrong, and confirm before the message is spoken or sent.
+A caregiver can acknowledge the request, and the patient sees that response.
 
-The app includes a real webcam pipeline, experimental speaker-specific phrase
-matching, an optional pretrained visual speech model, optional Gemini text
-clarification, a caregiver queue, persistent local memory, session metrics, and
-Arduino bedside controls. It is a hackathon research prototype, not a clinical
-communication or emergency alert system.
-
-## Run
+## Run on this laptop
 
 ```bash
 cd /Users/mpolepalli/unmute
-python3 server.py
+.venv/bin/python server.py
 ```
 
-Open **http://localhost:8080** in desktop Chrome or Edge. No Node, frontend build,
-API key, or Python package installation is needed for the core app. Open the same
-URL in another tab and choose **Care team** to acknowledge requests.
+Open **http://localhost:8080** in desktop Chrome or Edge. The server preloads the
+visual model in the background. Open a second tab at **http://localhost:8080/#care**
+for the caregiver queue. Stop the server with Ctrl+C.
 
-Python 3.11+ is recommended. The core was tested here with Python 3.15.2. Stop the
-server with Ctrl+C. If port 8080 is busy, use `python3 server.py --port 8081`.
+The Python web server uses only the standard library. PyMongo is optional for
+Atlas. Neural inference has its own Python environment; browser face tracking
+uses downloaded local WebAssembly assets. No Node.js build step is required.
 
-## What works without credentials
+## The MVP experience
 
-- Twelve selectable quick requests, each with explicit confirmation.
-- Browser speech synthesis after confirmation; visible text remains if speech fails.
-- Webcam capture with no microphone permission.
-- **Teach phrases:** record labeled mouth-region examples; store descriptors in
-  IndexedDB on the browser. Raw training video is not saved.
-- **My trained phrases:** normalize grayscale mouth-region images and compare
-  temporal sequences with dynamic time warping. This is actual visual matching,
-  not a canned transcript. It is speaker/position dependent and unvalidated.
-- One-switch scanning with adjustable timing, keyboard Space, and USB controls.
-- A direct, deliberate **Request help** control independent of any AI inference.
-- Patient review, rejection, repeat speech, and explicit caregiver acknowledgment.
-- SQLite profiles, confirmed phrase memory, request state, and JSON export.
-- Observed confirmation/acknowledgment times and source counts. Demo events are
-  labeled and excluded from those metrics and from physical alarms.
-- Local spelling suggestions and previously confirmed text interpretations.
+1. Click **Start communicating** and permit camera access. No microphone is used.
+2. Wait until the session says **Ready for your words**. Keep your whole face
+   visible with good front lighting.
+3. Mouth a short phrase naturally, then pause. Mouth landmarks trigger capture
+   automatically and a quiet interval ends the phrase. A short pre-roll reduces
+   loss of the first mouth movement. Phrases are bounded to a few seconds.
+4. Capture pauses while you review the suggestions. Nothing is spoken or sent.
+5. Select a candidate. If necessary, choose **Correct a word or sentence**, select
+   a word, apply its replacement, and review the corrected sentence.
+6. Click **Confirm & speak**, or use one-switch scanning and the physical Select
+   button. The confirmed message appears in the caregiver queue.
+7. A caregiver explicitly acknowledges or resolves it. The patient's status and
+   connected bedside device update to reflect that action.
+8. Choose **Say something else** to resume capture, or **End session** to stop the
+   session and release the camera.
 
-The sample **Try demo** flow is explicitly simulated. It never pretends to read
-your lips. Quick phrase buttons also do not use visual recognition.
+**Record a phrase** remains available for a manual three-second attempt. Quick
+phrase buttons work without a camera or any model. **Request help** is a direct,
+intentional control independent of AI interpretation.
 
-## Teach your own visual phrases
+This is a hackathon research prototype, not a clinical communication system or
+medical alarm. Mouth motion detection is heuristic segmentation, not proof that
+someone is speaking; chewing and other movement can trigger it. Patient review
+and rejection are integral to the experience.
 
-1. In **My voice**, enable the camera. Use **Adjust guide** to frame your mouth.
-2. Keep your head in the same position with good front lighting.
-3. Open **Teach phrases**. Start with three visually distinct requests such as
-   “I need water,” “Call my family,” and “Please adjust my pillow.”
-4. Record three examples of each. Wait for the countdown, then mouth the phrase
-   once during the three-second window. Use the same pace each time.
-5. Run the leave-one-out evaluation. It excludes each query example from its own
-   comparison set; it is not a clinical estimate or a substitute for fresh clips.
-6. Return to **My voice**, select **My trained phrases**, and record a fresh clip.
-   Review the closest matches; choose **None of these** if none is right.
+## What makes this more than a model demo
 
-The guide is manually positioned, not an automatic face tracker. Lighting and
-movement outside the mouth region can affect the classifier. The fixed rejection
-threshold is a heuristic, not calibrated confidence. No accuracy guarantee is
-made. Do not describe this path as an open-vocabulary neural lip reader.
+- **Continuous communication session:** local face landmarks track mouth motion
+  on a worker thread, with clear ready/capturing/processing/review states.
+- **Persistent visual model:** the server keeps one Auto-AVSR worker loaded rather
+  than launching and loading weights for every phrase. Cancellations/timeouts stop
+  that process group and allow a fresh attempt; a canceled model must reload.
+- **Real visual alternatives:** up to three distinct hypotheses come from the
+  neural decoder. They are not displayed as calibrated confidence probabilities.
+- **Gemini clarification:** optional text interpretation uses those visual
+  alternatives, saved context/names, and confirmed examples. The raw transcript
+  always remains available. No camera video goes to Gemini.
+- **Patient-controlled correction:** editing creates a fresh review decision.
+  Speech and request creation still require explicit confirmation.
+- **Personal phrase bank:** save up to 12 personal shortcuts. This saves words,
+  not a cloned voice or neural model fine-tune.
+- **Caregiver acknowledgment:** a visible request-to-receipt loop, with optional
+  Arduino display, LEDs, buzzer, and physical selection controls.
+- **Local-first persistence:** SQLite stores confirmed requests and an Atlas
+  outbox. Failed cloud writes retry from durable local records. Versioned outbox
+  entries prevent an older sync from clearing a newer acknowledgment update.
+- **Evidence:** timing measurements and tester-entered reference text support
+  raw-versus-top-suggestion word error measurements. No accuracy is invented.
 
-## Pretrained open-sentence lip reading
+## Models and installation on another machine
 
-`scripts/setup_avsr.py` downloads the upstream visual-only research code and
-weights into ignored directories and creates an isolated Python 3.11 environment.
-It uses the inference repository associated with Auto-AVSR, including MediaPipe
-face detection and upstream mouth cropping. On this machine the code, dependencies,
-and approximately 894 MB weight archive were downloaded and configured in `.env`.
-
-To install on another machine (macOS/Linux; adapt paths on Windows):
+These setup helpers target macOS/Linux. The downloaded packages, runtimes, and
+weights are intentionally excluded from Git; setup scripts recreate them.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install uv
+.venv/bin/python -m pip install uv -r requirements-optional.txt
 .venv/bin/python scripts/setup_avsr.py
+.venv/bin/python scripts/setup_vision.py
+.venv/bin/python server.py
 ```
 
-The installer requires internet and several GB of disk space. It keeps downloads
-under `vendor/`, weights under `models/`, and model packages under `.model-venv/`.
-Google Drive may rate-limit the upstream weight link. It preserves existing
-non-empty `.env` settings. Run `--activate-only` if downloads already exist.
+The first helper downloads an isolated Python 3.11 runtime, inference packages,
+upstream research code, and approximately 894 MB of visual speech model weights.
+It configures `AVSR_PYTHON`, `AVSR_REPO`, and `AVSR_CONFIG` in `.env` without
+replacing non-empty existing settings. Allow several GB of disk space. Google
+Drive may impose download quotas. `--activate-only` uses existing model downloads.
 
-Restart the server after installation, then select **Open sentences · Auto-AVSR**.
-The browser records silent video; the server normalizes it to 25 fps with FFmpeg,
-runs the visual model on CPU, and deletes temporary clips afterward. The adapter
-uses beam size 10 and no external language model to reduce setup/CPU cost. It does
-**not** reproduce the published benchmark configuration or accuracy.
+The second helper downloads about 22 MB of local browser face-tracking assets,
+including MediaPipe Tasks Vision 0.10.21 and the Face Landmarker task model.
+Hashes and source URLs are stored in `web/assets/vision/manifest.json`.
 
-```bash
-python3 scripts/check_model.py
-```
+**Visual speech:** the Auto-AVSR-associated multilingual inference repository,
+`LRS3_V_WER19.1` checkpoint; CPU, beam size 10, no external language model.
+This does not reproduce the checkpoint's published benchmark configuration or
+word error rate. The worker uses upstream detection, cropping, encoder, and beam
+search; it returns actual decoder alternatives. `AVSR_THREADS` defaults to 4 and
+`AVSR_TIMEOUT` defaults to 120 seconds.
 
-This runs an execution smoke test on the upstream sample GIF without audio and
-writes `artifacts/model-smoke.json`. The test executed successfully here in 14.85
-seconds for a three-second clip; a subsequent HTTP API test took 5.61 seconds.
-Its transcript contained errors; this confirms
-execution, not accurate recognition or new-speaker performance. On macOS the
-MediaPipe tracker needs permission to initialize a graphics context even though
-the speech model runs on CPU.
+**Mouth tracking:** browser-local MediaPipe Face Landmarker. Image frames are
+transferred to a local browser worker; only geometry is returned to the UI. Face
+tracking and neural lip reading are separate tasks.
 
-The optional model runs in a fresh subprocess for each clip; startup/model loading
-adds latency. `AVSR_TIMEOUT` defaults to 120 seconds. The UI reports failures
-instead of substituting sample sentences. The configured interpreter, repository,
-and `.ini` file can also be set manually with `AVSR_PYTHON`, `AVSR_REPO`, and
-`AVSR_CONFIG`. See `.env.example`.
+A persistent-worker execution benchmark on this laptop's three-second upstream
+sample observed 29.6 seconds for its first cold run and about 1.8 seconds for each
+of two warm runs. Subsequent cold loading was faster after caches warmed. These
+are execution measurements on one sample, not accuracy or latency guarantees.
 
-## Gemini: clarification, not automatic speech
+An optional upstream English decoding language model can be prepared with
+`scripts/setup_language_model.py`. It writes `models/unmute-visual-lm.ini` without
+changing `.env`. Compare it with `scripts/benchmark_worker.py --config
+models/unmute-visual-lm.ini --report artifacts/worker-benchmark-lm.json` before
+choosing it. The default remains the visual decoder: one sample did not establish
+an accuracy gain from that external language model.
 
-The server reads `.env` automatically. Add your own key locally:
+## Gemini setup
+
+Add your key to `.env`:
 
 ```dotenv
 GEMINI_API_KEY=your-key
 GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
-Restart the server. Expand **Prefer to type?**, enter a transcript, check **Ask
-Gemini**, and request interpretations. Gemini returns up to three possible
-sentences and a clarification question in structured JSON. The patient chooses
-and confirms; only then can a message be spoken or sent.
+Restart the server and use **Preferences → Connections → Test Gemini**. A
+configured key is distinguished from a successful live generation test. Errors
+are sanitized; API keys are never returned to the browser.
 
-In **Preferences → Connections**, click **Test Gemini** to verify live generation
-using synthetic text. The result shows the actual model, test suggestions, and
-response time. The raw transcript is always retained among the options for real
-requests, so the patient can choose it instead of an AI rewrite. A configured key
-alone is labeled unverified; provider errors are displayed without exposing keys.
+Enable **Clarify open sentences with Gemini** to opt in for actual capture. The
+server passes the raw transcript, visual hypotheses, optional saved context and
+names, and recent confirmed examples to Gemini for structured suggestions and a
+clarification question. The original transcript remains one of the choices.
+Provider failures return the original visual suggestions with a visible warning.
 
-For the integrated pipeline, enable **Clarify open sentences with Gemini** before recording. You can also paste an Auto-AVSR transcript into the typed form. The text,
-optional saved context/names, and up to ten confirmed examples go to Google only
-when you enable this option. Camera video never goes to Gemini. API keys remain
-server-side. Failed provider requests retain the raw input with a visible local
-fallback. Choose a model available to your API account if the default is retired
-or unavailable. Live structured generation has been verified with synthetic text using the configured Gemini model.
+The typed form also supports Gemini; it is useful for testing correction but is
+not counted as a visual recognition evaluation. Use a model available to your
+account if the configured model is retired. The API is optional; local visual
+recognition and quick phrases do not need internet after model installation.
 
-## Optional MongoDB Atlas integration
+## MongoDB Atlas setup
 
-```bash
-.venv/bin/python -m pip install -r requirements-optional.txt
+Put these settings in `.env` or `atlas-credentials.env`:
+
+```dotenv
+MONGODB_URI=mongodb+srv://username:password@your-cluster.example/
+MONGODB_DATABASE=unmute
 ```
 
-Set `MONGODB_URI` in `.env`, optionally set `MONGODB_DATABASE`, and launch with
-`.venv/bin/python server.py`. Configure Atlas database credentials and network
-access for the laptop. SQLite remains the local source of truth; request events
-are mirrored to Atlas as documents keyed by request ID, with status updates as
-upserts. Existing recent requests are replayed on startup. The browser reports
-the integration status. This optional cloud copy includes confirmed request text;
-use synthetic hackathon data. An unavailable Atlas connection does not stop local
-communication. A failed mirror attempt is retained in SQLite and replayed on
-server restart; this is not a durable production replication system.
+The separate Atlas file fills empty MongoDB settings; non-empty shell or `.env`
+settings take precedence. Other variables in that file are ignored. Both secret
+files are excluded by `.gitignore`. Install `requirements-optional.txt`, give the
+Atlas database user read/write access, and allow the laptop's IP in Atlas Network
+Access. The verified system CA store is used for SRV connections where available;
+TLS verification remains enabled.
 
-Use **Preferences → Connections → Test Atlas** after restarting the server. It
-checks a database ping and reads the request collection count without inserting
-test requests. A successful check confirms connectivity/read access; demonstrate
-an actual confirmed request and acknowledgment to verify write access separately.
+Restart and select **Preferences → Connections → Test Atlas**. This checks a ping
+and request collection read without writing a test request. To verify writes,
+confirm a synthetic request and acknowledge it in the caregiver view, then inspect
+its Atlas document. The `requests` collection uses the request ID as `_id`.
 
-You may keep `MONGODB_URI` and optional `MONGODB_DATABASE` in a separate
-`atlas-credentials.env` file instead. Unmute loads it automatically when those
-settings are empty in `.env` or the shell; non-empty existing settings take
-precedence. Other variables in that file are ignored. Both secret files are
-excluded by `.gitignore`. Restart the server after changing credentials. Atlas
-SRV connections use the system CA store where available; TLS verification stays
-enabled.
+SQLite is the source of truth. A versioned `mirror_outbox` table retains pending
+cloud writes and the mirror retries while the server is running. Session insights
+shows pending sync count. Requests continue locally during cloud outages. This is
+single-laptop demo replication, not a production clinical data architecture.
+
+## Measure instead of guessing
+
+After a real visual attempt, open **Evaluate this attempt · demo lab** and enter
+exactly what you intended to mouth. The app compares that reference with the raw
+transcript and top suggestion using word-level edit distance. Re-evaluating one
+attempt replaces its previous result. Simulated demos, manually edited sentences,
+and typed Gemini correction tests are excluded from visual error measurements.
+
+Session insights shows sample size, reference word count, weighted raw/top-suggestion
+WER, model call counts, observed latency, and pending cloud sync. WER can exceed
+100% when extra words are inserted. The report describes those attempts, not
+clinical accuracy, unseen speakers, or general population performance.
+
+The sample **Try demo** flow is explicitly simulated and never claims to read lips.
+Demo requests are excluded from real-session metrics and physical alarms.
+
+## Personal phrase training
+
+**Teach phrases** retains a separate offline experimental template matcher.
+Record three examples of at least two visually distinct phrases using a stable
+manual mouth guide, camera position, and lighting. Normalized mouth-region image
+sequences are compared using dynamic time warping. Run leave-one-out evaluation,
+then test fresh clips without adding them to training. Cropped descriptors live
+in this browser's IndexedDB; raw training videos are not stored.
+
+This is not neural fine-tuning. It is speaker/position dependent and unvalidated.
+The main automatic session uses the pretrained visual model, not this matcher.
+A useful future fine-tune would require consented, labeled examples and a separate
+held-out set; no such patient dataset is included or claimed here.
 
 ## Hardware
 
-See **[firmware/README.md](firmware/README.md)** for a complete pin table, LCD
-contrast options, upload steps, protocol, and optional ESP32 pager.
+See **[firmware/README.md](firmware/README.md)** for pin tables, contrast options,
+upload instructions, the USB protocol, and optional ESP32 pager setup.
 
-- UNO: select, back, help; scan-speed knob; LEDs; passive buzzer; LCD1602.
-- USB uses Web Serial at 115200 baud in desktop Chrome/Edge on localhost.
-- Firmware compiles for Arduino Uno; physical wiring/USB behavior must be checked
-  with the actual kit. No firmware was uploaded automatically.
-- Optional pager requires identifying your actual Espressif board and configuring
-  compatible GPIOs. `pager.ino` is supplied separately; do not assume the pictured
-  packaging proves a specific ESP32 variant or pinout.
-
-To reproduce the UNO compile without touching a device:
+The UNO sketch supports Select, Back, Help, a scan-speed knob, LEDs, passive
+buzzer, and LCD1602. Web Serial runs at 115200 baud in desktop Chrome/Edge on
+localhost. The sketch compiles for Arduino Uno. Physical wiring, LCD contrast,
+and device behavior still need checking with the actual kit. The Espressif
+packaging did not identify the board variant; choose suitable pins before using
+the optional pager sketch. Nothing connects to hospital equipment.
 
 ```bash
 python3 scripts/check_firmware.py
 ```
 
-This downloads tools into `vendor/arduino/` and writes compiled output under
-`artifacts/uno-build/`.
+## Local network demo
 
-## Network caregiver dashboard / optional pager
-
-Localhost-only mode needs no token. To expose the prototype on a trusted private
-hotspot, add a long `UNMUTE_TOKEN` to `.env` and run:
+To use a caregiver device or optional pager on a trusted private hotspot, set a
+long `UNMUTE_TOKEN` in `.env`, then run:
 
 ```bash
-python3 server.py --host 0.0.0.0
+.venv/bin/python server.py --host 0.0.0.0
 ```
 
-On the caregiver device, open `http://LAPTOP-LAN-IP:8080/#care`, visit Preferences,
-and enter the token. It stays in sessionStorage for that tab. Each API request
-uses an Authorization header. Local browser cross-origin requests are rejected.
-This is shared-token demo access, not multi-user authentication. It uses plain
-HTTP on your hotspot; do not expose it on the public internet. Use localhost on
-the patient laptop for camera and USB permissions. Hospital networking, clinical
-authentication, and nurse-call integration are outside this prototype.
+Open `http://LAPTOP-LAN-IP:8080/#care` on the caregiver device and enter the token
+in Preferences. Keep the patient camera/USB view at `http://localhost:8080`.
+The token uses an Authorization header and stays in the browser tab's
+sessionStorage. The hotspot endpoint uses HTTP, not encrypted transport. Do not
+expose this single-profile shared-token demo on the public internet.
 
 ## Verification
 
@@ -209,49 +236,54 @@ authentication, and nurse-call integration are outside this prototype.
 python3 -m unittest discover -s tests -v
 .venv/bin/python -m pip install playwright
 .venv/bin/python scripts/browser_smoke.py
+.venv/bin/python scripts/recording_smoke.py
+.venv/bin/python scripts/mvp_smoke.py
+.venv/bin/python scripts/vision_smoke.py
+.venv/bin/python scripts/benchmark_worker.py
 ```
 
-The browser script uses installed Google Chrome, an isolated temporary database,
-and a synthetic webcam. It covers patient/caregiver synchronization, confirmation,
-demo exclusion, text correction, profile and training persistence, webcam capture
-without audio, keyboard scanning, direct help, XSS escaping, mobile overflow, simulated USB protocol, HTTP origin/auth behavior, and
-ten deterministic recognizer checks. Screenshots go under `artifacts/`.
+Browser workflow tests use Chrome, a synthetic webcam, controlled model/geometry
+fixtures where stated, and temporary databases. The vision smoke test uses the
+actual local landmark model on the upstream silent sample. The worker benchmark
+uses the actual neural speech model. Neither proves recognition on a new speaker.
 
-The app stores local request/profile data in `data/unmute.db`. Training examples
-are browser-specific and do not automatically transfer to other browsers or
-devices. **Session insights** exports request/profile data, not visual templates.
-No background microphone capture, automatic clinical inference, or automatic
-speech before confirmation is implemented.
+`live_mvp_check.py` additionally exercises real Gemini generation and Atlas
+writes/acknowledgments using upstream/synthetic data, then removes its cloud test
+document. This is optional and requires your own credentials. Safe reports and
+screenshots go under ignored `artifacts/`.
 
-## Files
+Data is in `data/unmute.db`; browser templates and preferences are browser-specific.
+Exporting a session includes textual request/profile/evaluation data, not videos
+or browser templates. Temporary inference clips are deleted when processing ends.
+API keys stay server-side. Optional Atlas replication sends confirmed request text;
+use synthetic hackathon data.
+
+## Code map and attribution
 
 | Path | Purpose |
 | --- | --- |
-| `server.py` | HTTP API, SQLite, confirmation state, Gemini, optional Atlas |
-| `web/` | Responsive interface, camera, visual templates, speech, Web Serial |
-| `adapters/auto_avsr.py` | Video normalization and upstream inference adapter |
-| `firmware/` | UNO controller, optional ESP32 pager, wiring guide |
-| `scripts/` | Optional model/tool downloads and verification |
-| `tests/` | Backend behavior tests |
-| `docs/DEMO.md` | Demo sequence and prize submission positioning |
-| `source` | Your original handoff, preserved |
+| `server.py` | HTTP API, SQLite, Gemini, Atlas outbox, review/evaluation |
+| `model_worker.py` | Persistent process, warmup, cancellation, timeout recovery |
+| `adapters/avsr_worker.py` | Local neural video inference and real decoder hypotheses |
+| `web/` | Patient/caregiver UI, session state, tracking, capture, controls |
+| `firmware/` | UNO controller, optional pager, wiring guide |
+| `scripts/`, `tests/` | Reproducible setup and verification |
+| `docs/DEMO.md` | Judging demo and submission positioning |
+| `source` | Original team handoff |
 
-## Attribution and external code
+The app was developed with AI assistance. Disclose external and AI-assisted work
+as required by the event. The original handoff's competitor/accuracy claims are
+not product guarantees.
 
-The application code in `server.py`, `web/`, `adapters/`, and `firmware/` was written
-for this prototype. Disclose AI-assisted development in your submission where
-requested. The original handoff's benchmarking/competitor claims have not been
-incorporated as product guarantees.
-
-- [Visual Speech Recognition for Multiple Languages / Auto-AVSR inference](https://github.com/mpc001/Visual_Speech_Recognition_for_Multiple_Languages):
-  Pingchuan Ma and collaborators. Downloaded code retains its license and notices;
-  revision recorded at `vendor/avsr-provenance.json`. Its LICENSE includes research
-  restrictions. Review those and model/dataset terms before any commercial use.
-- [Auto-AVSR paper](https://arxiv.org/abs/2303.14307).
-- [Google Gemini API](https://ai.google.dev/api/generate-content): optional structured
-  text suggestions, called using REST; no client API key.
-- [Web Serial API](https://developer.chrome.com/docs/capabilities/serial).
-- [PyMongo](https://www.mongodb.com/docs/languages/python/pymongo-driver/current/get-started/):
-  optional Atlas mirror.
+- [Visual Speech Recognition for Multiple Languages](https://github.com/mpc001/Visual_Speech_Recognition_for_Multiple_Languages)
+  and [Auto-AVSR](https://arxiv.org/abs/2303.14307), Pingchuan Ma and collaborators.
+  Downloaded code retains upstream notices. Its license includes research
+  restrictions; review model/dataset terms before commercial use. The downloaded
+  revision is in `vendor/avsr-provenance.json`.
+- [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker):
+  pretrained face geometry; retain upstream Apache 2.0/software/model notices.
+- [Gemini structured outputs](https://ai.google.dev/gemini-api/docs/structured-output)
+  and [PyMongo](https://www.mongodb.com/docs/languages/python/pymongo-driver/current/):
+  optional live cloud services, configured with your own credentials.
 - Arduino LiquidCrystal, optional ESP32 Arduino core, and ArduinoJson retain their
-  respective upstream licenses. Browser speech synthesis is provided by the OS.
+  upstream licenses. Speech synthesis is provided by the browser/OS.

@@ -34,7 +34,7 @@ def main():
             headers['Authorization']='Bearer '+os.environ['UNMUTE_TOKEN']
         with urllib.request.urlopen(urllib.request.Request(url+'/api/transcribe',data=payload,headers=headers),timeout=180) as response:
             decision=json.load(response)
-        assert decision['source']=='auto-avsr' and decision['candidates']==[decision['raw']]
+        assert decision['source']=='auto-avsr' and decision['raw'] in decision['candidates']
         result={'text':decision['raw']}
     else:
         process=subprocess.run([env_python,str(ROOT/'adapters'/'auto_avsr.py'),str(clip)],

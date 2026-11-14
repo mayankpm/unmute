@@ -5,6 +5,7 @@ import base64
 import binascii
 from datetime import datetime, timezone
 import hmac
+import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
+from model_worker import PersistentModel, ModelUnavailable
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "web"
@@ -84,6 +86,20 @@ def clean_text(value, limit=500):
     return value
 
 
+def word_errors(reference, hypothesis):
+    expected = re.findall(r"[\w]+(?:['’][\w]+)*", reference.casefold())
+    actual = re.findall(r"[\w]+(?:['’][\w]+)*", hypothesis.casefold())
+    if not expected:
+        raise InputError('Enter the words you intended to say.')
+    previous = list(range(len(actual) + 1))
+    for i, word in enumerate(expected, 1):
+        current = [i]
+        for j, other in enumerate(actual, 1):
+            current.append(min(current[-1] + 1, previous[j] + 1, previous[j - 1] + (word != other)))
+        previous = current
+    return {'errors': previous[-1], 'words': len(expected), 'wer': round(previous[-1] / len(expected), 4)}
+
+
 class Store:
     def __init__(self, path):
         self.path = str(path)
@@ -106,6 +122,15 @@ class Store:
             raw TEXT NOT NULL, confirmed TEXT NOT NULL, uses INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY(raw, confirmed));
         CREATE TABLE IF NOT EXISTS profile (id INTEGER PRIMARY KEY, content TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS favorites (id TEXT PRIMARY KEY, text TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS evaluations (
+            decision_id TEXT PRIMARY KEY, reference TEXT NOT NULL, raw_errors INTEGER NOT NULL,
+            suggestion_errors INTEGER NOT NULL, words INTEGER NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS attempts (
+            id TEXT PRIMARY KEY, source TEXT NOT NULL, raw TEXT NOT NULL, total_ms INTEGER NOT NULL,
+            inference_ms INTEGER NOT NULL, gemini_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS mirror_outbox (
+            id TEXT PRIMARY KEY, payload TEXT NOT NULL, version INTEGER NOT NULL, updated REAL NOT NULL);
         """)
         self.db.commit()
 
@@ -133,6 +158,66 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute(
                 "SELECT * FROM memory ORDER BY uses DESC, rowid DESC LIMIT 30")]
+
+    def favorites(self):
+        with self.lock:
+            return [{**dict(r), 'category': 'Personal', 'urgent': False}
+                    for r in self.db.execute('SELECT * FROM favorites ORDER BY created_at DESC')]
+
+    def favorite(self, obj):
+        with self.lock, self.db:
+            if obj.get('action') == 'remove':
+                self.db.execute('DELETE FROM favorites WHERE id=?', (clean_text(obj.get('id'), 80),))
+            else:
+                text = clean_text(obj.get('text'), 250)
+                existing = self.db.execute('SELECT id FROM favorites WHERE text=?', (text,)).fetchone()
+                if not existing:
+                    if self.db.execute('SELECT COUNT(*) FROM favorites').fetchone()[0] >= 12:
+                        raise InputError('Your phrase bank holds 12 phrases. Remove one before adding another.')
+                    self.db.execute('INSERT INTO favorites VALUES(?,?,?)', (str(uuid.uuid4()), text, now()))
+        return {'favorites': self.favorites()}
+
+    def revise(self, obj):
+        text = clean_text(obj.get('text'), 250)
+        with self.lock:
+            row = self.db.execute('SELECT * FROM decisions WHERE id=?', (obj.get('decision_id'),)).fetchone()
+            if not row or row['used'] or row['created'] < time.time() - 3600:
+                raise InputError('This review has expired. Start a new attempt.')
+        result = self.decision([text], row['raw'], 'edited', bool(row['simulated']))
+        return {**result, 'raw': row['raw'], 'question': 'Are these your exact words?'}
+
+    def evaluate(self, obj):
+        reference = clean_text(obj.get('reference'), 250)
+        with self.lock, self.db:
+            row = self.db.execute('SELECT * FROM decisions WHERE id=?', (obj.get('decision_id'),)).fetchone()
+            if not row or row['simulated'] or row['source'] not in ('auto-avsr', 'gemini', 'local-visual'):
+                raise InputError('Evaluate an actual model attempt. Sample demos and manually edited sentences are excluded.')
+            if row['source'] == 'gemini' and not self.db.execute('SELECT id FROM attempts WHERE id=?', (row['id'],)).fetchone():
+                raise InputError('This is a typed suggestion test. Evaluate a recorded visual attempt to measure lip-reading errors.')
+            raw = word_errors(reference, row['raw'])
+            top = word_errors(reference, json.loads(row['candidates'])[0])
+            self.db.execute('INSERT OR REPLACE INTO evaluations VALUES(?,?,?,?,?,?)',
+                            (row['id'], reference, raw['errors'], top['errors'], raw['words'], now()))
+        return {'raw': raw, 'suggestion': top, 'reference': reference}
+
+    def record_attempt(self, decision_id, source, raw, total_ms, inference_ms, gemini_ms):
+        with self.lock, self.db:
+            self.db.execute('INSERT INTO attempts VALUES(?,?,?,?,?,?,?)',
+                            (decision_id, source, raw, total_ms, inference_ms, gemini_ms, now()))
+
+    def enqueue_mirror(self, event):
+        with self.lock, self.db:
+            self.db.execute('''INSERT INTO mirror_outbox VALUES(?,?,1,?) ON CONFLICT(id)
+                DO UPDATE SET payload=excluded.payload,version=version+1,updated=excluded.updated''',
+                            (event['id'], json.dumps(event), time.time()))
+
+    def pending_mirror(self):
+        with self.lock:
+            return [dict(row) for row in self.db.execute('SELECT * FROM mirror_outbox ORDER BY updated LIMIT 25')]
+
+    def finish_mirror(self, request_id, version):
+        with self.lock, self.db:
+            self.db.execute('DELETE FROM mirror_outbox WHERE id=? AND version=?', (request_id, version))
 
     def decision(self, candidates, raw, source, simulated=False):
         decision_id = str(uuid.uuid4())
@@ -195,10 +280,20 @@ class Store:
             requests = [dict(r) for r in self.db.execute(
                 "SELECT * FROM requests ORDER BY created_at DESC LIMIT 200")]
             real = [dict(r) for r in self.db.execute("SELECT * FROM requests WHERE simulated=0")]
+            evaluated = self.db.execute('SELECT COUNT(*),COALESCE(SUM(raw_errors),0),COALESCE(SUM(suggestion_errors),0),COALESCE(SUM(words),0) FROM evaluations').fetchone()
+            attempt_stats = self.db.execute('SELECT COUNT(*),AVG(total_ms),AVG(inference_ms),AVG(gemini_ms) FROM attempts').fetchone()
+            pending_sync = self.db.execute('SELECT COUNT(*) FROM mirror_outbox').fetchone()[0]
         acknowledged = [r for r in real if r["acknowledged_at"]]
         delays = [(datetime.fromisoformat(r["acknowledged_at"]) - datetime.fromisoformat(r["created_at"])).total_seconds()
                   for r in acknowledged]
-        return {"requests": requests, "profile": self.profile(), "memory": self.memory(),
+        return {"requests": requests, "profile": self.profile(), "memory": self.memory(), 'favorites': self.favorites(),
+                'evaluation': {'clips': evaluated[0], 'words': evaluated[3],
+                               'raw_wer': round(evaluated[1] / evaluated[3], 4) if evaluated[3] else None,
+                               'suggestion_wer': round(evaluated[2] / evaluated[3], 4) if evaluated[3] else None},
+                'pipeline': {'attempts': attempt_stats[0], 'average_ms': round(attempt_stats[1]) if attempt_stats[1] else None,
+                             'inference_ms': round(attempt_stats[2]) if attempt_stats[2] else None,
+                             'gemini_ms': round(attempt_stats[3]) if attempt_stats[3] else None},
+                'pending_sync': pending_sync,
                 "metrics": {"confirmed": len(real), "pending": sum(r["status"] == "pending" for r in real),
                             "corrected": sum(r["corrected"] for r in real),
                             "average_ack_seconds": round(sum(delays) / len(delays), 1) if delays else None,
@@ -206,8 +301,10 @@ class Store:
 
 
 class AtlasMirror:
-    """Optional event outbox. SQLite remains the local source of truth."""
-    def __init__(self):
+    """Retry failed cloud writes from a versioned SQLite outbox."""
+    def __init__(self, store=None):
+        self.store = store
+        self.stopping = threading.Event()
         self.status = "not configured"
         self.events = queue.Queue(maxsize=1000)
         self.client = None
@@ -221,13 +318,15 @@ class AtlasMirror:
                 if uri.startswith("mongodb+srv://") and Path("/etc/ssl/cert.pem").exists():
                     options["tlsCAFile"] = "/etc/ssl/cert.pem"
                 self.client = MongoClient(uri, **options)
-                self.status = "connecting"
+                self.status = "configured; awaiting first sync"
                 threading.Thread(target=self.run, daemon=True).start()
             except ImportError:
                 self.status = "install optional dependencies"
 
     def emit(self, event):
         if self.client:
+            if self.store:
+                self.store.enqueue_mirror(event)
             try:
                 self.events.put_nowait(event)
             except queue.Full:
@@ -235,19 +334,37 @@ class AtlasMirror:
 
     def run(self):
         collection = self.client[os.environ.get("MONGODB_DATABASE", "unmute")].requests
-        while True:
-            event = self.events.get()
+        while not self.stopping.is_set():
+            event = None
             try:
-                collection.replace_one({"_id": event["id"]}, {"_id": event["id"], **event}, upsert=True)
+                try:
+                    event = self.events.get(timeout=3)
+                except queue.Empty:
+                    pass
+                pending = self.store.pending_mirror() if self.store else []
+                if not pending and not event:
+                    continue
+                entries = pending if self.store else [{'id': event['id'], 'payload': json.dumps(event), 'version': 0}]
+                for entry in entries:
+                    payload = json.loads(entry['payload'])
+                    collection.replace_one({'_id': entry['id']}, {'_id': entry['id'], **payload}, upsert=True)
+                    if self.store:
+                        self.store.finish_mirror(entry['id'], entry['version'])
                 self.status = "connected"
             except Exception:
                 # No URI or provider exception (which may contain credentials) is logged.
                 self.status = "unavailable; local data retained"
             finally:
-                self.events.task_done()
+                if event is not None:
+                    self.events.task_done()
+
+    def close(self):
+        self.stopping.set()
+        if self.client:
+            self.client.close()
 
 
-def gemini_suggestions(raw, profile, memory):
+def gemini_suggestions(raw, profile, memory, visual_candidates=None):
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         return None
@@ -267,6 +384,7 @@ def gemini_suggestions(raw, profile, memory):
     payload = {"systemInstruction": {"parts": [{"text": instructions}]},
                "contents": [{"role": "user", "parts": [{"text": json.dumps({
                    "transcript": raw, "context": profile["context"], "names": profile["names"],
+                   "visual_candidates": visual_candidates or [],
                    "confirmed_examples": memory[:10]})}]}],
                "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema,
                                     "temperature": 0.2, "maxOutputTokens": 1200}}
@@ -302,23 +420,37 @@ def local_suggestions(raw, memory):
 class App:
     def __init__(self, db_path):
         self.store = Store(db_path)
-        self.atlas = AtlasMirror()
+        self.atlas = AtlasMirror(self.store)
         for event in reversed(self.store.state()['requests']):
             self.atlas.emit(event)
         self.inference_lock = threading.Lock()
         self.token = os.environ.get("UNMUTE_TOKEN", "")
         self.integration_checks = {}
         self.check_lock = threading.Lock()
+        self.model = PersistentModel(ROOT)
 
     def config(self):
         return {"gemini": bool(os.environ.get("GEMINI_API_KEY")), "atlas": self.atlas.status,
                 "gemini_model": os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
                 "integration_checks": self.integration_checks.copy(),
+                'model_worker': self.model.snapshot(),
+                'face_tracking': (STATIC / 'assets' / 'vision' / 'face_landmarker.task').exists(),
                 "avsr": all(os.environ.get(k) for k in ("AVSR_PYTHON", "AVSR_REPO", "AVSR_CONFIG")),
-                "phrases": [{"id": pid, "text": text, "category": cat, "urgent": pid in URGENT_IDS}
+                "phrases": self.store.favorites() + [{"id": pid, "text": text, "category": cat, "urgent": pid in URGENT_IDS}
                             for pid, text, cat in PHRASES]}
 
     def post(self, path, obj):
+        if path == '/api/model/warmup':
+            try: return self.model.start()
+            except ModelUnavailable as exc: raise InputError(str(exc))
+        if path == '/api/model/cancel':
+            return {'canceled': self.model.cancel(clean_text(obj.get('job_id'), 80))}
+        if path == '/api/favorites':
+            return self.store.favorite(obj)
+        if path == '/api/revise':
+            return self.store.revise(obj)
+        if path == '/api/evaluate':
+            return self.store.evaluate(obj)
         if path == "/api/check-integration":
             return self.check_integration(obj.get("service"))
         if path == "/api/profile":
@@ -341,10 +473,11 @@ class App:
         if path == "/api/choices":
             source = obj.get("source")
             if source == "quick":
-                phrase = next((p for p in PHRASES if p[0] == obj.get("phrase_id")), None)
+                phrases = [{'id': pid, 'text': text} for pid, text, _ in PHRASES] + self.store.favorites()
+                phrase = next((p for p in phrases if p['id'] == obj.get("phrase_id")), None)
                 if not phrase:
                     raise InputError("Unknown phrase.")
-                candidates = [phrase[1]]
+                candidates = [phrase['text']]
             elif source in ("local-visual", "demo"):
                 candidates = obj.get("candidates")
                 if not isinstance(candidates, list) or not 1 <= len(candidates) <= 3:
@@ -395,6 +528,7 @@ class App:
                 self.atlas.client.admin.command("ping")
                 database = self.atlas.client[os.environ.get("MONGODB_DATABASE", "unmute")]
                 count = database.requests.count_documents({}, maxTimeMS=2500)
+                self.atlas.status = 'connected'
                 result.update(status="verified", document_count=count,
                               message="Atlas connection and request collection read succeeded. This check writes no data.")
         except urllib.error.HTTPError as exc:
@@ -424,30 +558,51 @@ class App:
             raise InputError("Unsupported video format.")
         try:
             video = base64.b64decode(obj.get("video", ""), validate=True)
+            trim_start = float(obj.get('trim_start', 0))
+            duration = float(obj.get('duration', 8))
+            if not math.isfinite(trim_start) or not math.isfinite(duration) or not 0 <= trim_start <= 30 or not .3 <= duration <= 10:
+                raise ValueError('invalid clip bounds')
         except (ValueError, TypeError, binascii.Error):
-            raise InputError("Invalid video.")
+            raise InputError("Invalid video or clip duration.")
         if not 100 <= len(video) <= 8 * 1024 * 1024:
             raise InputError("Video must be under 8 MB.")
-        if not self.inference_lock.acquire(blocking=False):
-            raise InputError("Another clip is processing. Please wait.")
+        job_id = clean_text(obj.get('job_id', str(uuid.uuid4())), 80)
+        started = time.monotonic()
         try:
             with tempfile.TemporaryDirectory(prefix="unmute-clip-") as tmp:
                 path = Path(tmp) / ("clip.mp4" if mime == "video/mp4" else "clip.webm")
                 path.write_bytes(video)
-                result = subprocess.run([
-                    os.environ["AVSR_PYTHON"], str(ROOT / "adapters" / "auto_avsr.py"), str(path)],
-                    capture_output=True, text=True, timeout=int(os.environ.get("AVSR_TIMEOUT", "120")))
-                if result.returncode:
-                    raise InputError("Auto-AVSR failed. Check its environment, weights and model configuration.")
-                raw = clean_text(json.loads(result.stdout)["text"], 250)
-            response = self.store.decision([raw], raw, "auto-avsr")
-            return {**response, "raw": raw, "question": "Is this what you meant?"}
-        except subprocess.TimeoutExpired:
-            raise InputError("Auto-AVSR timed out. Use Quick Phrases or increase AVSR_TIMEOUT.")
+                result = self.model.infer(path, job_id, trim_start, duration,
+                                          timeout=int(os.environ.get('AVSR_TIMEOUT', '120')))
+            raw = clean_text(result['text'], 250)
+            visual = list(dict.fromkeys(clean_text(text, 250) for text in result.get('candidates', [raw])))[:3]
+            warning = None
+            interpreted = None
+            gemini_ms = 0
+            if obj.get('use_gemini') is True:
+                before_gemini = time.monotonic()
+                try:
+                    interpreted = gemini_suggestions(raw, self.store.profile(), self.store.memory(), visual)
+                    if interpreted is None:
+                        warning = 'Gemini is not configured. Showing visual model suggestions.'
+                except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError, InputError):
+                    warning = 'Gemini is unavailable. Your original visual suggestions are ready to review.'
+                gemini_ms = round((time.monotonic() - before_gemini) * 1000)
+            source = 'gemini' if interpreted else 'auto-avsr'
+            candidates = interpreted['candidates'] if interpreted else visual
+            response = self.store.decision(candidates, raw, source)
+            timing = {'total_ms': round((time.monotonic() - started) * 1000),
+                      'inference_ms': result.get('inference_ms', result.get('total_ms', 0)),
+                      'gemini_ms': gemini_ms, 'worker_startup_ms': self.model.startup_ms}
+            self.store.record_attempt(response['decision_id'], source, raw, timing['total_ms'], timing['inference_ms'], gemini_ms)
+            return {**response, 'raw': raw, 'visual_candidates': visual, 'timing': timing,
+                    'gemini_used': bool(interpreted), 'warning': warning,
+                    'model': interpreted.get('model') if interpreted else None,
+                    'question': interpreted['question'] if interpreted else 'Which sentence did you mean?'}
+        except ModelUnavailable as exc:
+            raise InputError(str(exc))
         except (OSError, ValueError, KeyError):
-            raise InputError("Auto-AVSR is not ready. Check the configured paths and model output.")
-        finally:
-            self.inference_lock.release()
+            raise InputError('The visual model could not read this clip. Please try again or use a quick phrase.')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -465,9 +620,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
-        self.end_headers()
-        self.wfile.write(body)
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A canceled browser request does not make the server unhealthy.
 
     def authorized(self):
         origin = self.headers.get("Origin")
@@ -492,8 +650,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/config":
                 return self.reply(200, self.server.app.config())
+            if path == '/api/model/status':
+                return self.reply(200, self.server.app.model.snapshot())
             if path == "/api/state":
-                return self.reply(200, self.server.app.store.state())
+                return self.reply(200, {**self.server.app.store.state(), 'model_worker': self.server.app.model.snapshot(),
+                                        'atlas_status': self.server.app.atlas.status})
             if path == "/api/export":
                 return self.reply(200, self.server.app.store.state())
             if path == "/api/pager":
@@ -503,15 +664,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "Not found."})
         allowed = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js",
                    "/style.css": "style.css", "/recognizer.js": "recognizer.js", "/serial.js": "serial.js",
-                   "/selftest": "selftest.html", "/selftest.js": "selftest.js"}
+                   "/selftest": "selftest.html", "/selftest.js": "selftest.js",
+                   '/capture.js': 'capture.js', '/session.js': 'session.js',
+                   '/face-worker.js': 'face-worker.js', '/tracker.js': 'tracker.js'}
         filename = allowed.get(path)
+        if path.startswith('/assets/vision/'):
+            relative = path.removeprefix('/assets/vision/')
+            if relative in ('vision_bundle.mjs', 'face_landmarker.task', 'manifest.json',
+                            'wasm/vision_wasm_internal.js', 'wasm/vision_wasm_internal.wasm',
+                            'wasm/vision_wasm_nosimd_internal.js', 'wasm/vision_wasm_nosimd_internal.wasm'):
+                filename = 'assets/vision/' + relative
         if not filename:
             return self.reply(404, {"error": "Not found."})
         import mimetypes
         file = STATIC / filename
         if not file.exists():
             return self.reply(404, {"error": "Not found."})
-        self.reply(200, file.read_bytes(), (mimetypes.guess_type(filename)[0] or "text/plain") + "; charset=utf-8")
+        mime = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+        self.reply(200, file.read_bytes(), mime + ('; charset=utf-8' if mime.startswith(('text/', 'application/javascript')) else ''))
 
     def do_POST(self):
         if not self.authorized():
@@ -547,12 +717,16 @@ def main():
     server.app = app
     print(f"Unmute is ready: http://localhost:{args.port}", flush=True)
     print("Caregiver view: open the same URL in a second tab and choose Care team.", flush=True)
+    if app.model.configured:
+        app.model.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        app.model.close()
+        app.atlas.close()
         app.store.db.close()
 
 

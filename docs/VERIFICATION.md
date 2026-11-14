@@ -1,41 +1,54 @@
-# Verification performed November 14, 2026
+# MVP verification — November 14, 2026
 
 | Check | Result |
 | --- | --- |
-| Backend behavior | 16 unittest cases passed |
-| Browser integration | Passed in installed Google Chrome via Playwright |
-| Visual recognizer algorithm | 10 deterministic browser checks passed |
-| Camera capture | Passed with browser-provided synthetic video; no audio tracks |
-| Template persistence | Recorded example survives browser reload |
-| Patient / caregiver | Confirm → receive → acknowledge → resolve synchronizes across tabs |
-| One-switch input | Keyboard selection/confirmation passed |
-| USB protocol | Browser stream mock passes input/output checks; no physical board attached |
-| HTTP origin/auth | Cross-origin mutations, unconfirmed requests, and missing network token rejected |
-| Mobile layout | Checked at 390px; no document or camera-region horizontal overflow |
-| Text escaping | User-supplied HTML remains text |
-| UNO firmware | Compiled for arduino:avr:uno; 5,548 bytes flash, 660 bytes global RAM |
-| Pretrained visual model | Successfully executed on the upstream sample, without audio |
-| Video upload API | `/api/transcribe` successfully invokes the actual model |
+| Backend behavior | 36 unittest cases passed |
+| Core browser flow | Patient/caregiver synchronization, confirmation, demo exclusion, text correction, persistence, one-switch input, help, simulated USB, origin/auth checks, escaping, and mobile layout passed |
+| Visual template algorithm | 10 deterministic browser checks passed |
+| Recording recovery | Real synthetic-webcam capture, elapsed processing state, cancellation before upload, delayed responses, model error, and missing recorder-stop watchdog passed |
+| MVP browser flow | Silence gating, automatic segmentation, pause for review, word repair, evaluation, personal shortcuts, camera release, and responsive layout passed with controlled geometry/model fixtures |
+| Actual browser face model | Local MediaPipe WebAssembly produced mouth geometry on the upstream silent sample |
+| Actual speech worker | Neural inference completed; the same process handled repeated clips |
+| Worker recovery | Cancellation and timeout kill the process group and allow the next request |
+| Evaluation integrity | Demo/manual edits/typed correction tests excluded from visual WER; repeat evaluation replaces the previous one |
+| Durable Atlas outbox | Restart persistence and acknowledgment-version race checks passed |
+| Live Gemini + Atlas | Actual generation, request write/read, acknowledgment update, and drained outbox verified using synthetic/upstream data; cloud test document removed |
+| Full actual automatic session | Chrome used upstream video as a fake webcam; actual face tracking, automatic capture, neural inference, and live Gemini reached the review screen without a manual recording click |
+| UNO firmware | Earlier compile passed for arduino:avr:uno; 5,548 bytes flash, 660 bytes global RAM |
 
-The three-second sample produced `IN ANY CASE ONE CITIZEN COACH AGREE`, which
-contains recognition errors. The first successful adapter smoke test took 14.85
-seconds, and the subsequent HTTP API test took 5.61 seconds. These timings include
-model startup and decoding and are observations on this laptop, not performance
-guarantees. This was not a held-out patient/new-speaker accuracy evaluation.
+## Measured execution
 
-CPU speech inference uses beam size 10 and no external language model. The
-MediaPipe tracker needs a macOS graphics context; it failed inside the restricted
-tool sandbox and succeeded when run with the required host permissions.
+The baseline persistent-worker benchmark used the same three-second silent
+upstream sample for all runs:
 
-Live Gemini structured generation was subsequently verified with synthetic text
-using gemini-3.1-flash-lite (about 0.9 seconds). Live Atlas connectivity, request
-write/read, and acknowledgment updates were also verified using a synthetic demo
-request. The cloud test document was removed afterward; the safe result is saved
-in artifacts/atlas-smoke.json. Separate atlas-credentials.env fallback loading and
-existing-configuration precedence were checked. Speech synthesis is implemented but automated tests disabled audible
-playback. Physical wiring, button behavior, LCD contrast, and ESP32 pager behavior
-remain unverified on hardware. The ESP32 variant was not identifiable from its
-packaging photo, so that optional sketch is not claimed as board-verified.
+- First cold run: **29,557 ms**.
+- Warm runs: **1,776 ms** and **1,806 ms**.
+- A later isolated worker startup measured **4,468 ms**, after caches had warmed.
+- Full actual automatic-session test: **17.17 seconds** from starting the session
+  to review, including preparation and automatic capture. The resulting clip's
+  processing was **5.5 seconds**: **4.7 seconds** visual inference and **0.8 seconds**
+  Gemini. That test used a looping prerecorded face, not a live patient/new speaker.
 
-Reproduction instructions are in `README.md`. Screenshots, model output, a silent
-test clip, and compiled UNO files are in the ignored `artifacts/` directory.
+These are observations on this laptop and sample, not performance guarantees.
+The transcript contained substantial errors. The tests prove execution and
+patient-controlled flow, not clinical accuracy or reliable recognition on a new
+speaker. No personal neural fine-tuning or patient training dataset is claimed.
+
+An optional upstream English decoding language model was also benchmarked. It
+changed the transcript and added latency (warm runs about 2.3 seconds), but this
+single sample did not establish an accuracy gain, so the default remains the
+visual decoder without that external language model. The optional setup helper
+and alternate `.ini` are available for a properly labeled evaluation.
+
+## Limits
+
+Automated browser fixtures prove UI/state behavior; they do not establish visual
+recognition accuracy. The actual landmark and full automatic-session tests are
+separate from those controlled fixtures. Speech synthesis is implemented, while
+routine browser tests disable audible playback. Physical wiring, button behavior,
+LCD contrast, and ESP32 pager operation remain unverified on the kit. Its exact
+Espressif variant was not identifiable from the packaging photo.
+
+Safe reports, screenshots, a silent upstream test clip, and compiled UNO output
+are in ignored `artifacts/`. Credentials and patient/local data are excluded from
+Git. Reproduction commands are in `README.md`.
