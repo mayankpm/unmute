@@ -11,19 +11,17 @@ sides, rather than two already-connected legs.
 
 | Part | Connection |
 | --- | --- |
-| Select button | D6 → switch → GND |
-| Back button | D7 → switch → GND |
-| Help button | D8 → switch → GND |
-| Green LED | D9 → 220–330Ω resistor → LED anode; cathode → GND |
-| Amber LED | D10 → 220–330Ω resistor → LED anode; cathode → GND |
-| Red LED | D13 → 220–330Ω resistor → LED anode; cathode → GND |
+| Confirm button | D7 → switch → GND (tap = Select, hold 1.5 s = Help) |
+| Next button | D8 → switch → GND (tap = Next, hold 1.5 s = Back) |
+| RGB LED (common cathode) | Longest leg → GND; red → D9, green → D10, blue → D6, each through 220Ω |
 | Passive buzzer | A1 → buzzer +; buzzer − → GND |
-| Scan-speed potentiometer | Outer terminals → 5V and GND; center wiper → A0 |
+| Photoresistor (bed light) | 5V → photoresistor → A0 → 10kΩ → GND |
 | USB | UNO → laptop, data-capable cable |
 
-Buttons use internal pull-ups; no external button resistors are needed. If the
-knob isn't wired yet, remove the speed-reading block from the sketch so an
-unconnected A0 cannot change scan speed.
+Buttons use internal pull-ups; no external button resistors are needed. The LED
+shows green (ready/acknowledged/resolved), amber (sent, waiting, or app offline)
+and red (help waiting). If red and green come out swapped, swap the D9/D10 wires.
+For an urgent request the buzzer beeps every second until any button is pressed.
 
 ## Optional LCD1602 (parallel pins, not an I²C module)
 
@@ -45,11 +43,9 @@ Set `USE_LCD` to 0 to skip the LCD. Otherwise:
 | 15 backlight A | 5V through a 220Ω resistor |
 | 16 backlight K | GND |
 
-The photographed kit lists one potentiometer. If it controls scan speed, try a
-contrast divider: 10kΩ from 5V to VO, 1kΩ from VO to ground. Contrast varies by LCD;
-if text is unreadable, dedicate the potentiometer to contrast instead (outer pins
-5V/GND, wiper VO), and disable scan-speed readings in firmware. Adjust speed in the
-app. A second potentiometer would let both be adjustable.
+The potentiometer sets LCD contrast: outer pins to 5V and GND, wiper to VO. Turn it
+until the text is dark and readable straight on. If it can't go dark enough, wire VO
+straight to GND. Scan speed is adjusted in the app.
 
 ## Upload and connect
 
@@ -57,15 +53,21 @@ app. A second potentiometer would let both be adjustable.
 2. Upload. Close Serial Monitor so the browser can own the serial port.
 3. Run `python3 server.py` and open http://localhost:8080 in desktop Chrome/Edge.
 4. Click **Connect bedside controller** and select the UNO.
-5. Turn on **One-switch scanning**. Select chooses the highlighted option; another
-   deliberate Select on **Confirm & speak** sends it. Back returns to choices.
-   Help sends the literal request “Please help me” independently of recognition.
+5. Next moves the highlight to the next option (it turns on scanning if needed).
+   Confirm chooses the highlighted option; another Confirm on **Confirm & speak**
+   sends it. Holding Next goes back to the choices. Holding Confirm sends the
+   literal request “Please help me”, whatever was recognised.
 6. Amber means sent/waiting; red means a predefined help request is waiting;
    green means ready, acknowledged, or resolved (read the LCD/app for exact state).
+7. If the photoresistor reads below `DARK_THRESHOLD` (in `web/app.js`, default 250),
+   the app warns “Turn on the bed light”. Tune it halfway between the normal-light
+   and covered readings.
 
 Browser and firmware exchange newline-delimited ASCII at 115200 baud:
 
-- Device → browser: `READY`, `SELECT`, `BACK`, `HELP`, `SPEED|2200`.
+- Device → browser: `READY`, `SELECT`, `NEXT`, `BACK`, `HELP`, `LIGHT|0-1023`
+  (once a second, higher = brighter). `SPEED|2200` is still accepted by the app
+  but this wiring has no speed knob.
 - Browser → device: `STATE|pending|I need water` (also `urgent`, `acknowledged`,
   `resolved`, `idle`). The browser repeats current state as a heartbeat.
 - A missing heartbeat for 15 seconds displays a disconnected state. Demo events

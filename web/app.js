@@ -39,6 +39,9 @@ let stream = null, busy = false, sending = false, decision = null, choice = null
 let filter = 'All', scanIndex = -1, scanTimer = null, scanInterval = 2200, toastTimer, pollInFlight = false;
 let backendOnline = false, lastHardwareState = '', lastHardwareSent = 0, lastHelp = 0, lastConfirmedFrames = null;
 let processingTimer = null;
+// Bedside photoresistor (A0). Tune at the venue: halfway between normal-light and covered readings.
+const DARK_THRESHOLD = 250;
+let bedLight = null, roomTooDark = false;
 let activeRecorder = null, activeRequest = null, activeJob = null, attemptGeneration = 0, sessionGeneration = 0;
 let selectedWord = 0, evaluationDecision = null, lastTiming = null;
 const communication = new CommunicationSession($('camera'), (blob, bounds) => processSessionClip(blob, bounds));
@@ -125,7 +128,7 @@ function renderConnections() {
     ['Auto-AVSR', config.avsr ? 'Configured · unverified' : 'Not configured'],
     ['Visual model worker', config.model_worker?.loaded ? 'Loaded · ready for reuse' : config.model_worker?.status || 'Not started'],
     ['Automatic mouth tracking', config.face_tracking ? 'Installed · browser only' : 'Run scripts/setup_vision.py'],
-    ['USB controller', bedside.connected ? 'Connected' : 'Not connected']
+    ['USB controller', bedside.connected ? (bedLight === null ? 'Connected' : `Connected · ${roomTooDark ? 'too dark' : 'room light OK'}`) : 'Not connected']
   ].map(([name, value]) => `<div class="integration-row"><span>${escape(name)}</span><span>${escape(value)}</span></div>`).join('');
   $('integration-check-results').innerHTML = Object.values(checks).map(check => `<div class="integration-check ${check.status === 'verified' ? 'verified' : ''}"><strong>${check.service === 'gemini' ? 'Gemini' : 'MongoDB Atlas'} · ${escape(check.status.replaceAll('_',' '))}</strong><p>${escape(check.message)}</p>${check.candidates ? `<p>Test suggestions: ${check.candidates.map(escape).join(' / ')}</p>` : ''}${check.document_count !== undefined ? `<p>${check.document_count} documents in the requests collection</p>` : ''}<small>Checked ${escape(new Date(check.checked_at).toLocaleTimeString())} · ${check.latency_ms} ms</small></div>`).join('');
 }
@@ -188,7 +191,7 @@ function showDecision(response) {
   $('candidate-question').textContent = response.question || 'Which sentence did you mean?';
   $('raw-transcript').textContent = response.raw ? `Raw transcript: “${response.raw}”` : '';
   $('raw-transcript').classList.toggle('hidden', !response.raw);
-  $('candidate-source').textContent = `${sourceNames[response.source] || response.source}${response.model ? ` · ${response.model}` : ''}${response.simulated ? ' · Sample words, not camera recognition' : ' · Suggestions require your confirmation'}`;
+  $('candidate-source').textContent = `${sourceNames[response.source] || response.source}${response.phrase_match ? ' · ICU phrase match' : ''}${response.model ? ` · ${response.model}` : ''}${response.simulated ? ' · Sample words, not camera recognition' : ' · Suggestions require your confirmation'}`;
   $('interpret-badge').textContent = response.simulated ? 'Demo mode' : 'Review your words';
   evaluationDecision = (['auto-avsr','local-visual'].includes(response.source) || (response.source === 'gemini' && response.timing)) && !response.simulated ? response.decision_id : null;
   $('evaluation-panel').classList.toggle('hidden', !evaluationDecision);
@@ -234,6 +237,11 @@ async function confirmChoice() {
     const request = await api('/api/confirm', {decision_id:decision.decision_id, choice, confirmed:true});
     showSent(request);
     if ($('auto-speak').checked) speak(request.text);
+    // Hands-free: after a confirmed request, listen for the next phrase without needing a click.
+    if (communication.active) setTimeout(() => {
+      if (!communication.active || !communication.paused || sent !== request || busy || sending) return;
+      if (document.hidden) pausedForBackground = true; else communication.resume();
+    }, 3000);
     await poll();
   } finally {
     sending = false;
@@ -475,12 +483,14 @@ async function transcribeClip(blob, bounds, generation) {
   activeRequest = controller;
   const job = crypto.randomUUID();
   activeJob = job;
-  capturePhase('processing', $('avsr-gemini').checked ? 'Reading your lips, then preparing Gemini suggestions…' : 'Reading your lips…');
+  capturePhase('processing', $('phrase-match').checked ? 'Matching your lips to common ICU requests…'
+    : $('avsr-gemini').checked ? 'Reading your lips, then preparing Gemini suggestions…' : 'Reading your lips…');
   try {
     const video = await blobData(blob);
     if (generation !== attemptGeneration) throw new DOMException('Canceled', 'AbortError');
     const response = await api('/api/transcribe', {video, mime: blob.type, job_id: job,
-      use_gemini: $('avsr-gemini').checked && !!config.gemini, ...bounds}, controller.signal);
+      use_gemini: $('avsr-gemini').checked && !!config.gemini, phrase_match: $('phrase-match').checked,
+      ...bounds}, controller.signal);
     if (generation !== attemptGeneration) throw new DOMException('Canceled', 'AbortError');
     showDecision(response);
   } finally {
@@ -592,10 +602,16 @@ communication.addEventListener('geometry', event => {
   guide.style.width = `${w*100}%`; guide.style.height = `${h*100}%`;
   guide.querySelector('span').textContent = 'MOUTH TRACKED';
 });
+let pausedForBackground = false;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && communication.active && !communication.paused) {
     communication.pause();
-    communication.state('paused', 'Capture paused while this tab is in the background. Resume when you’re ready.');
+    pausedForBackground = true;
+    communication.state('paused', 'Capture paused while this tab is in the background. It resumes when you come back.');
+  } else if (!document.hidden && pausedForBackground) {
+    // Back from the care tab: carry on listening unless a choice is still waiting for review.
+    pausedForBackground = false;
+    if (communication.active && communication.paused && !decision && !busy && !sending) communication.resume();
   }
 });
 
@@ -750,9 +766,11 @@ bedside.addEventListener('connected', () => {
 });
 bedside.addEventListener('disconnected', () => {
   $('usb-button').innerHTML = `${icon('usb')}Connect bedside controller`;
+  bedLight = null; roomTooDark = false;
   renderConnections();
 });
 bedside.addEventListener('error', event => toast(`USB: ${event.detail}`,true));
+bedside.autoReconnect();
 bedside.addEventListener('command', guard(async event => {
   const [command, value] = event.detail.split('|');
   if (command === 'SELECT') hardwareSelect();
@@ -767,8 +785,18 @@ bedside.addEventListener('command', guard(async event => {
       $('scan-speed-label').textContent = `${(speed/1000).toFixed(1)} seconds`;
     }
   }
+  if (command === 'LIGHT') updateBedLight(Number(value));
   if (command === 'READY') {lastHardwareState='';await syncHardware();}
 }));
+function updateBedLight(level) {
+  if (!Number.isFinite(level)) return;
+  const first = bedLight === null;
+  bedLight = level;
+  // Small hysteresis so a reading near the threshold doesn't flicker the warning
+  const dark = roomTooDark ? level < DARK_THRESHOLD + 40 : level < DARK_THRESHOLD;
+  if (dark && !roomTooDark) toast('Room is too dark to read lips. Turn on the bed light.', true);
+  if (dark !== roomTooDark || first) {roomTooDark = dark; renderConnections();}
+}
 async function syncHardware() {
   if (!bedside.connected) return;
   const real = state.requests.filter(r => !r.simulated);

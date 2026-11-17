@@ -70,6 +70,16 @@ PHRASES = [
     ("thanks", "Thank you", "Connection"),
 ]
 URGENT_IDS = {"pain", "nurse", "breath"}
+# Requests an intubated ICU patient most often needs to make. "Match common ICU phrases" ranks
+# these (plus the patient's saved phrases) with the visual model instead of free-form decoding.
+ICU_PHRASES = [text for _, text, _ in PHRASES] + [
+    "Please help me", "I need suction", "My mouth is dry", "I want to sit up", "Please turn me over",
+    "Raise the bed", "Lower the bed", "My chest hurts", "My back hurts", "I have a headache",
+    "I feel dizzy", "Where am I", "What happened to me", "What time is it", "When can I go home",
+    "Where is my family", "I love you", "Yes", "No", "I am tired", "I want to sleep",
+    "Turn off the light", "I need my glasses", "I need a blanket", "Take out the tube",
+    "Please wait", "I am hungry", "I need my medicine",
+]
 MAX_BODY = 12 * 1024 * 1024
 
 
@@ -567,19 +577,23 @@ class App:
         if not 100 <= len(video) <= 8 * 1024 * 1024:
             raise InputError("Video must be under 8 MB.")
         job_id = clean_text(obj.get('job_id', str(uuid.uuid4())), 80)
+        phrase_match = obj.get('phrase_match') is True
+        phrases = (list(dict.fromkeys(ICU_PHRASES + [f['text'] for f in self.store.favorites()]))
+                   if phrase_match else None)
         started = time.monotonic()
         try:
             with tempfile.TemporaryDirectory(prefix="unmute-clip-") as tmp:
                 path = Path(tmp) / ("clip.mp4" if mime == "video/mp4" else "clip.webm")
                 path.write_bytes(video)
                 result = self.model.infer(path, job_id, trim_start, duration,
-                                          timeout=int(os.environ.get('AVSR_TIMEOUT', '120')))
+                                          timeout=int(os.environ.get('AVSR_TIMEOUT', '120')), phrases=phrases)
             raw = clean_text(result['text'], 250)
             visual = list(dict.fromkeys(clean_text(text, 250) for text in result.get('candidates', [raw])))[:3]
             warning = None
             interpreted = None
             gemini_ms = 0
-            if obj.get('use_gemini') is True:
+            # Phrase matching already returns clean, known sentences; Gemini rewriting would only add noise.
+            if obj.get('use_gemini') is True and not phrase_match:
                 before_gemini = time.monotonic()
                 try:
                     interpreted = gemini_suggestions(raw, self.store.profile(), self.store.memory(), visual)
@@ -595,10 +609,13 @@ class App:
                       'inference_ms': result.get('inference_ms', result.get('total_ms', 0)),
                       'gemini_ms': gemini_ms, 'worker_startup_ms': self.model.startup_ms}
             self.store.record_attempt(response['decision_id'], source, raw, timing['total_ms'], timing['inference_ms'], gemini_ms)
-            return {**response, 'raw': raw, 'visual_candidates': visual, 'timing': timing,
-                    'gemini_used': bool(interpreted), 'warning': warning,
+            return {**response, 'raw': '' if phrase_match else raw, 'visual_candidates': visual, 'timing': timing,
+                    'gemini_used': bool(interpreted), 'warning': warning, 'phrase_match': phrase_match,
+                    'phrase_scores': result.get('phrase_scores') if phrase_match else None,
                     'model': interpreted.get('model') if interpreted else None,
-                    'question': interpreted['question'] if interpreted else 'Which sentence did you mean?'}
+                    'question': interpreted['question'] if interpreted else
+                    ('Closest matches from common ICU requests. Which did you mean?' if phrase_match
+                     else 'Which sentence did you mean?')}
         except ModelUnavailable as exc:
             raise InputError(str(exc))
         except (OSError, ValueError, KeyError):

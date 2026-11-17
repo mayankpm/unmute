@@ -23,7 +23,7 @@ def main():
         result = subprocess.run([
             sys.executable, str(repo / "infer.py"), f"config_filename={config}",
             f"data_filename={normalized}", "detector=mediapipe", "gpu_idx=-1"],
-            cwd=repo, capture_output=True, text=True)
+            cwd=repo, capture_output=True, text=True, env={**os.environ, 'PYTHONUTF8': '1'})
         if result.returncode:
             sys.stderr.write(result.stderr)
             raise RuntimeError('Upstream inference failed; see diagnostics above.')

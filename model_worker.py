@@ -38,7 +38,7 @@ class PersistentModel:
         with self.lock:
             return {'status': self.state, 'loaded': self.ready.is_set() and self.state in ('ready', 'processing'),
                     'startup_ms': self.startup_ms, 'last_latency_ms': self.last_latency_ms,
-                    'completed': self.completed, 'device': 'CPU', 'message': self.message}
+                    'completed': self.completed, 'device': getattr(self, 'device', 'CPU'), 'message': self.message}
 
     def start(self):
         with self.lock:
@@ -53,6 +53,7 @@ class PersistentModel:
             command = self.command or [os.environ['AVSR_PYTHON'], '-u', str(self.root / 'adapters' / 'avsr_worker.py')]
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
+            env['PYTHONUTF8'] = '1'  # Windows: upstream reads UTF-8 files without an explicit encoding
             env.setdefault('OMP_NUM_THREADS', '4')
             env.setdefault('MPLCONFIGDIR', str(self.root / 'vendor' / 'matplotlib-cache'))
             try:
@@ -86,6 +87,7 @@ class PersistentModel:
                     if message.get('type') == 'ready':
                         self.state = 'ready'
                         self.startup_ms = message.get('startup_ms')
+                        self.device = 'GPU' if str(message.get('device', '')).startswith('cuda') else 'CPU'
                         self.message = 'Visual model ready; weights stay loaded.'
                         self.ready.set()
                     elif message.get('type') == 'startup_error':
@@ -101,7 +103,7 @@ class PersistentModel:
                     self.message = 'The visual worker stopped. Start a new attempt to reload it.'
                     self.ready.set()
 
-    def infer(self, path, job_id=None, trim_start=0, duration=None, timeout=120):
+    def infer(self, path, job_id=None, trim_start=0, duration=None, timeout=120, phrases=None):
         if not self.request_lock.acquire(blocking=False):
             raise ModelUnavailable('Another phrase is processing. Please wait for its review screen.')
         job_id = job_id or str(uuid.uuid4())
@@ -119,7 +121,8 @@ class PersistentModel:
                 self.state = 'processing'
                 self.message = 'Reading your silent video.'
                 self.process.stdin.write(json.dumps({'id': job_id, 'path': str(path),
-                                                     'trim_start': trim_start, 'duration': duration}) + '\n')
+                                                     'trim_start': trim_start, 'duration': duration,
+                                                     'phrases': phrases or []}) + '\n')
                 self.process.stdin.flush()
             deadline = started + timeout
             while time.monotonic() < deadline:

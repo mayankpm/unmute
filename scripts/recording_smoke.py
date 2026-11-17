@@ -53,6 +53,7 @@ def main():
                 page.goto(f'http://127.0.0.1:{server.server_port}')
                 expect(page.locator('#connection')).to_contain_text('connected')
                 page.locator('#recognition-mode').select_option('avsr')
+                page.locator('#phrase-match').uncheck()  # this test covers the open-sentence path
                 page.locator('#camera-start').click()
                 expect(page.locator('#camera-badge')).to_have_text('Camera active')
                 page.locator('#record-button').click()

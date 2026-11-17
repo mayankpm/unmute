@@ -7,10 +7,12 @@ export class BedsideController extends EventTarget {
     this.chain = Promise.resolve();
   }
   get connected() { return !!this.writer; }
-  async connect() {
+  async connect(known = null) {
     if (!('serial' in navigator)) throw new Error('USB controls need desktop Chrome or Edge.');
     if (this.port) return;
-    const port = await navigator.serial.requestPort();
+    if (!known) this.manualDisconnect = false;
+    // `known` is a port this site was already allowed to use: reconnect without the picker.
+    const port = known || await navigator.serial.requestPort();
     try {
       await port.open({baudRate: 115200});
       this.port = port;
@@ -58,6 +60,22 @@ export class BedsideController extends EventTarget {
     return this.chain;
   }
   async disconnect() {
+    this.manualDisconnect = true;
     if (this.reader) await this.reader.cancel();
+  }
+  // Reconnect to the previously approved board after a page reload, and when it is plugged back in.
+  autoReconnect() {
+    // Best effort only: it must never stop the rest of the app from starting.
+    const serial = navigator.serial;
+    if (!serial || typeof serial.getPorts !== 'function') return;
+    const tryKnown = async () => {
+      try {
+        if (this.port || this.manualDisconnect) return;
+        const [port] = await serial.getPorts();
+        if (port) await this.connect(port);
+      } catch { /* the board stays available through the Connect button */ }
+    };
+    if (typeof serial.addEventListener === 'function') serial.addEventListener('connect', tryKnown);
+    tryKnown();
   }
 }

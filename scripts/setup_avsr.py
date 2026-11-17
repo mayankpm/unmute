@@ -18,7 +18,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / 'vendor'
 REPO = VENDOR / 'Visual_Speech_Recognition_for_Multiple_Languages'
-TLS = ssl.create_default_context(cafile='/etc/ssl/cert.pem') if Path('/etc/ssl/cert.pem').exists() else ssl.create_default_context()
+CA_FILE = '/etc/ssl/cert.pem' if Path('/etc/ssl/cert.pem').exists() else None
+TLS = ssl.create_default_context(cafile=CA_FILE) if CA_FILE else ssl.create_default_context()
+# venv layout differs: bin/python on macOS/Linux, Scripts\python.exe on Windows
+BIN, EXE = ('Scripts', '.exe') if os.name == 'nt' else ('bin', '')
+
+
+def venv_exe(venv, name):
+    return venv / BIN / f'{name}{EXE}'
 
 
 def download(url, target):
@@ -36,12 +43,13 @@ def main():
         activate()
         return
     VENDOR.mkdir(exist_ok=True)
-    uv = ROOT / '.venv' / 'bin' / 'uv'
+    uv = venv_exe(ROOT / '.venv', 'uv')
     runtime = VENDOR / 'python'
     subprocess.run([str(uv), '--cache-dir', str(VENDOR / 'uv-cache'), 'python', 'install', '3.11',
                     '--install-dir', str(runtime), '--no-bin'], check=True)
-    python = sorted(runtime.glob('cpython-3.11*/bin/python3.11'))[-1]
-    env_python = ROOT / '.model-venv' / 'bin' / 'python'
+    pattern = 'cpython-3.11*/python.exe' if os.name == 'nt' else 'cpython-3.11*/bin/python3.11'
+    python = sorted(runtime.glob(pattern))[-1]
+    env_python = venv_exe(ROOT / '.model-venv', 'python')
     if not env_python.exists():
         subprocess.run([str(python), '-m', 'venv', str(ROOT / '.model-venv')], check=True)
     if not REPO.exists():
@@ -70,7 +78,8 @@ def main():
     if not archive.exists():
         with urllib.request.urlopen('https://bit.ly/40EAtyX',timeout=30,context=TLS) as response:
             resolved=response.geturl()
-        code='import gdown,re,sys; file_id=re.search(r"/d/([^/]+)",sys.argv[1]).group(1); result=gdown.download(id=file_id,output=sys.argv[2],quiet=True,use_cookies=False,verify="/etc/ssl/cert.pem",timeout=60); sys.exit(0 if result else 1)'
+        verify = repr(CA_FILE) if CA_FILE else 'True'
+        code=f'import gdown,re,sys; file_id=re.search(r"/d/([^/]+)",sys.argv[1]).group(1); result=gdown.download(id=file_id,output=sys.argv[2],quiet=True,use_cookies=False,verify={verify},timeout=60); sys.exit(0 if result else 1)'
         print('Downloading the upstream visual-only weights (about 891 MB)…', flush=True)
         subprocess.run([str(env_python),'-c',code,resolved,str(archive)],check=True)
     print(f'Upstream code: {REPO}',flush=True)
@@ -102,7 +111,7 @@ def activate():
         config.write(output)
     env_path = ROOT/'.env'
     env = env_path.read_text() if env_path.exists() else (ROOT/'.env.example').read_text()
-    settings = {'AVSR_PYTHON':str(ROOT/'.model-venv'/'bin'/'python'), 'AVSR_REPO':str(REPO),
+    settings = {'AVSR_PYTHON':str(venv_exe(ROOT/'.model-venv','python')), 'AVSR_REPO':str(REPO),
                 'AVSR_CONFIG':str(output_config)}
     for key, value in settings.items():
         if re.search(rf'^{key}=\s*$', env, re.MULTILINE):
